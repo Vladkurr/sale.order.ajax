@@ -1,33 +1,11 @@
 <?php
-/*
- * Простой компонент оформления заказа, html которого формируется не js кодом, а php.
- *
- * Вывод свойств:
- *  свойства фильтруются в соответствии с выставленными параметрами в настройках компонента.
- *  разделение по плательщиками сделано генерацией нескольких форм, а не изменением полей одной.
- *  если не выбрать способ доставки или оплату, то выбранной будет считаться первая выведенная.
- *
- * Оформление заказа:
- *  1. в js файле шаблона компонента происходит формирование массива формы
- *  2. отправка запроса к текущей странице с сформированным массивом заказа, в который добавляется параметр MAKE_ORDER
- *  3. при получении параметра MAKE_ORDER, компонент вызывает метод создания заказа с параметрами из массива
- *  4. метод создания заказа вызывает другие методы, которые добавляют к нему отгрузки, платежные системы и т.д.
- *
- * Примечания:
- *  Компонент отлично работает со стандартной корзиной битрикса
- *
- * При оформлении заказа происходит проверка на авторизацию пользователя, если пользователь не авторизован,
- * то компонент создаст пользователя Unknown или добавит заказ к существующему
- */
-
-
 use \Bitrix\Main\Loader;
 use \Bitrix\Main\Application;
 use Bitrix\Sale;
 
 if (!defined('B_PROLOG_INCLUDED') || B_PROLOG_INCLUDED !== true) die();
 
-class ExampleCompSimple extends CBitrixComponent
+class LightSale extends CBitrixComponent
 {
     // проверка подключения модуля sale
     private function _checkModules()
@@ -42,16 +20,25 @@ class ExampleCompSimple extends CBitrixComponent
     public function GetUserId()
     {
         global $USER;
-        $unauthorizedUser = CUser::GetList(['sort' => 'asc'], 'sort', ["LOGIN" => "Unknown"])->fetch();
+        $sort = ['sort' => 'asc'];
+        $order = 'sort';
+        $unauthorizedUser = CUser::GetList($sort, $order, ["LOGIN" => "Unknown"])->fetch();
         if (!$USER->GetID() && !$unauthorizedUser) {
             $user = new CUser;
+            $chars = 'qazxswedcvfrtgbnhyujmkiolp1234567890QAZXSWEDCVFRTGBNHYUJMKIOLP';
+            $size = strlen($chars) - 1;
+            $password = '';
+            while($length--) {
+                $password .= $chars[random_int(0, $size)];
+            }
             $arFields = array(
                 "NAME" => "Неавторизованный пользователь",
                 "LOGIN" => "Unknown",
+                "EMAIL" => "Unknown@Unknown.ru",
                 "LID" => "ru",
                 "ACTIVE" => "Y",
-                "PASSWORD" => "UnknownUser",
-                "CONFIRM_PASSWORD" => "UnknownUser",
+                "PASSWORD" => $password,
+                "CONFIRM_PASSWORD" => $password,
             );
             $ID = $user->Add($arFields);
         } elseif (!$USER->GetID() && $unauthorizedUser) {
@@ -60,57 +47,104 @@ class ExampleCompSimple extends CBitrixComponent
         return $ID;
     }
 
-    // получение всего списка доставок с учетом ограничений по типам плательщиков ограничениями.
-    public function GetDeliveries()
+    // получение списка доставок.
+    public function GetDeliveries($payer = null, $deliveryForPaysystem = null)
     {
+        // формирование массива доставок с ограничениями по плательщикам и платежным системам
         $deliveries = Sale\Delivery\Services\Manager::getActiveList();
-        foreach ($deliveries as $key => $delivery) {
-            $restrict = \Bitrix\Sale\Internals\ServiceRestrictionTable::getList(array('select' => array('PARAMS'), 'filter' => array('SERVICE_ID' => $delivery['ID'], "SERVICE_TYPE" => \Bitrix\Sale\Services\Base\RestrictionManager::SERVICE_TYPE_SHIPMENT)))->fetchall();
-            if ($restrict[0]["PARAMS"]["PERSON_TYPE_ID"]) {
-                $deliveries[$key]["PERSON_TYPE_ID"] = $restrict[0]["PARAMS"]["PERSON_TYPE_ID"];
-            } else $deliveries[$key]["PERSON_TYPE_ID"] = [];
+        foreach ($deliveries as $key => &$delivery) {
+            $dbRestr = \Bitrix\Sale\Delivery\Restrictions\Manager::getList(array(
+                'filter' => array('SERVICE_ID' => $delivery['ID']) // ID службы доставки
+            ));
+            $params = [];
+            while ($arRestr = $dbRestr->fetch()) {
+                if(!$arRestr["PARAMS"]) {
+                    $arRestr["PARAMS"] = array();
+                }
+                $param = $arRestr["CLASS_NAME"]::prepareParamsValues($arRestr["PARAMS"], $delivery['ID']); // Получаем платежные системы
+                $params = array_merge($param, $params);
+            }
+            $params["PAY_SYSTEMS"] ? $delivery["PAY_SYSTEMS"] = $params["PAY_SYSTEMS"] : $delivery["PAY_SYSTEMS"] = [];
+            $params["PERSON_TYPE_ID"] ? $delivery["PERSON_TYPE_ID"] = $params["PERSON_TYPE_ID"] : $delivery["PERSON_TYPE_ID"] = [];
         }
-
+        // отсев доставок, не указанных в параметрах компонента
         if ($this->arParams["DELIVERIES"]) {
-            foreach ($deliveries as $key => $delivery) {
+            foreach ($deliveries as $key => &$delivery) {
                 if (!in_array($delivery["ID"], $this->arParams["DELIVERIES"])) unset($deliveries[$key]);
+            }
+        }
+        // доставки для определенного плательщика
+        if ($payer) {
+            foreach ($deliveries as $key => &$delivery) {
+                if (!$delivery["PERSON_TYPE_ID"]) continue;
+                if (!in_array($payer, $delivery["PERSON_TYPE_ID"])) unset($deliveries[$key]);
+            }
+        }
+        // доставки для платежной системы
+        if ($deliveryForPaysystem) {
+            foreach ($deliveries as $key => &$delivery) {
+                if (!in_array($delivery["ID"], $deliveryForPaysystem)) unset($deliveries[$key]);
             }
         }
 
         return $deliveries;
     }
 
-    // получение всего списка платежных систем с учетом ограничений по типам плательщиков ограничениями.
-    public function GetPaySystems()
+    // получение списка платежных систем
+    public function GetPaySystems($payer = null, $paySystemsForDelivery = null)
     {
+        // формирование массива платежных систем с ограничениями по плательщикам и доставкам
         $paySystemResult = Sale\PaySystem\Manager::getList(array('filter' => array('ACTIVE' => 'Y',)));
         while ($paySystem = $paySystemResult->fetch()) {
-            $dbRestriction = \Bitrix\Sale\Internals\ServiceRestrictionTable::getList(array('select' => array('PARAMS'), 'filter' => array('SERVICE_ID' => $paySystem['ID'],)))->fetchall();
-            $paySystem["PERSON_TYPE_ID"] = [];
-            foreach ($dbRestriction as $restrict) {
-                if ($restrict["PARAMS"]["PERSON_TYPE_ID"]) {
-                    $paySystem["PERSON_TYPE_ID"] = $restrict["PARAMS"]["PERSON_TYPE_ID"];
-                } else $paySystem["PERSON_TYPE_ID"] = [];
+            $dbRestr = \Bitrix\Sale\Internals\ServiceRestrictionTable::getList(array(
+                'filter' => array(
+                    'SERVICE_ID' => $paySystem['ID'],
+                    'SERVICE_TYPE' => \Bitrix\Sale\Services\PaySystem\Restrictions\Manager::SERVICE_TYPE_PAYMENT
+                )
+            ));
+            $restrictions = array();
+            while ($restriction = $dbRestr->fetch()) {
+                if (is_array($restriction['PARAMS']))
+                    $restrictions = array_merge($restrictions, $restriction['PARAMS']);
             }
+            $restriction = \Bitrix\Sale\Services\PaySystem\Restrictions\Delivery::prepareParamsValues(array(), $paySystem['ID']);
+            $restrictions['DELIVERY'] = $restriction['DELIVERY'];
+
+            $restrictions["PERSON_TYPE_ID"] ? $paySystem["PERSON_TYPE_ID"] = $restrictions["PERSON_TYPE_ID"] : $paySystem["PERSON_TYPE_ID"] = [];
+            $restrictions["DELIVERY"] ? $paySystem["DELIVERY"] = $restrictions["DELIVERY"] : $paySystem["DELIVERY"] = [];
             $paySystems[] = $paySystem;
         }
+        // отсев платежных систем, не указанных в параметрах компонента
         if ($this->arParams["PAYSYSTEMS"]) {
             foreach ($paySystems as $key => $paySystem) {
                 if (!in_array($paySystem["ID"], $this->arParams["PAYSYSTEMS"])) unset($paySystems[$key]);
             }
         }
-
+        // платежные системы для определенного плательщика
+        if ($payer) {
+            foreach ($paySystems as $key => &$paySystem) {
+                if (!$paySystem["PERSON_TYPE_ID"]) continue;
+                if (!in_array($payer, $paySystem["PERSON_TYPE_ID"])) unset($paySystems[$key]);
+            }
+        }
+        // платежные системы для определенной доставки
+        if ($paySystemsForDelivery) {
+            foreach ($paySystems as $key => &$paySystem) {
+                if (!in_array($paySystem["ID"], $paySystemsForDelivery)) unset($paySystems[$key]);
+            }
+        }
         return $paySystems;
     }
 
-    // получение всего списка типов плательщиков с учетом ограничений по плательщикам ограничениями.
+    // получение списка плательщиков.
     public function GetPersonTypes()
     {
+        // формирование массива плательщиков
         $types = CSalePersonType::GetList();
         while ($ob = $types->GetNext()) {
             $persons[] = $ob;
         }
-
+        // отсев плательщиков по параметрам
         if ($this->arParams["PERSONS"]) {
             foreach ($persons as $key => $person) {
                 if (!in_array($person["ID"], $this->arParams["PERSONS"])) unset($persons[$key]);
@@ -120,10 +154,24 @@ class ExampleCompSimple extends CBitrixComponent
         return $persons;
     }
 
-    // получение всех полей, распределение по плательщикам происходит на фронте посредством поля PERSON_TYPE_ID
-    public function GetFields()
+    // получение списка полей ввода
+    public function GetFields($payer = null)
     {
-        $dbFields = CSaleOrderProps::GetList();
+        if ($payer) { // для плательщика
+            $dbFields = CSaleOrderProps::GetList(
+                array("SORT" => "ASC"),
+                array(
+                    "PERSON_TYPE_ID" => $payer,
+                    "ACTIVE" => "Y",
+                ));
+
+        } else { // всех полей
+            $dbFields = CSaleOrderProps::GetList(array("SORT" => "ASC"),
+                array(
+                    "ACTIVE" => "Y",
+                ));
+        }
+        //формирование массива полей
         while ($ob = $dbFields->GetNext()) {
             $result[] = $ob;
         }
@@ -131,14 +179,14 @@ class ExampleCompSimple extends CBitrixComponent
     }
 
     // получение корзины для конкретного пользователя
-    public function GetBasketItems()
+    public function GetBasketItems($user = null)
     {
-        $arFUser = CSaleUser::GetList(['USER_ID' => $this->GetUserId()]);
+        $arFUser = CSaleUser::GetList(['USER_ID' => $user]);
         $basketItems = Bitrix\Sale\Basket::loadItemsForFUser($arFUser['ID'], SITE_ID);
         return $basketItems;
     }
 
-    // создание выбанной платежной системы для заказа
+    // добавление оплаты в заказ
     public function SetPaySystem($order, $paymentId)
     {
         $paymentCollection = $order->getPaymentCollection();
@@ -147,24 +195,25 @@ class ExampleCompSimple extends CBitrixComponent
                 intval($paymentId)
             )
         );
-        $payment->setField("SUM", $order->getPrice());
-        $payment->setField("CURRENCY", $order->getCurrency());
+        $payment->setField("SUM", $order->getPrice());  // сумма оплаты
+        $payment->setField("CURRENCY", $order->getCurrency()); // валюта
     }
 
-    // создание отгрузки для заказа (с установкой выбранной службы доставки)
+    // добавление отгрузки к заказу (с установкой выбранной службы доставки)
     public function setBasketShipment($order, $deliveryId, $basketItems)
     {
         $shipmentCollection = $order->getShipmentCollection();
         $shipment = $shipmentCollection->createItem(Bitrix\Sale\Delivery\Services\Manager::getObjectById($deliveryId));
 
         $shipmentItemCollection = $shipment->getShipmentItemCollection();
+        // добавление товаров в отгрузку
         foreach ($basketItems as $basketItem) {
             $item = $shipmentItemCollection->createItem($basketItem);
             $item->setQuantity($basketItem->getQuantity());
         }
     }
 
-    // создание полей, введенных пользователем, для заказа
+    // добавление полей, введенных пользователем, к заказу
     public function setOrderProperties($order, $properties)
     {
         foreach ($order->getPropertyCollection() as $prop) {
@@ -176,11 +225,11 @@ class ExampleCompSimple extends CBitrixComponent
     }
 
     // создание объекта заказа, который будет использоваться в других методах
-    // метод поочередно обращается к других методам, которые добавляют к заказу корзину, параметры и т.д.
+    // метод поочередно обращается к других методам, которые добавляют к заказу корзину, поля ввода и т.д.
     public function SetOrder($PersonTypeId, $deliveryId, $paymentId, $properties)
     {
         $order = Bitrix\Sale\Order::create(SITE_ID, $this->GetUserId());
-        $basketItems = $this->GetBasketItems();
+        $basketItems = $this->GetBasketItems($this->GetUserId());
 
         if ($PersonTypeId != null) {
             $order->setPersonTypeId($PersonTypeId);
@@ -207,6 +256,18 @@ class ExampleCompSimple extends CBitrixComponent
         $this->arResult["FIELDS"] = $this->GetFields();
     }
 
+    // Изменение порядка вывода доставки и оплаты, в зависимости от настроек компонента
+    public function saleOrder()
+    {
+        if ($this->arParams["ORDER"] == "DELIVERY") {
+            $this->arResult["ORDER"]["FIRST"] = $this->arResult["DELIVERIES"];
+            $this->arResult["ORDER"]["SECOND"] = $this->arResult["PAYSYSTEMS"];
+        } else {
+            $this->arResult["ORDER"]["FIRST"] = $this->arResult["PAYSYSTEMS"];
+            $this->arResult["ORDER"]["SECOND"] = $this->arResult["DELIVERIES"];
+        }
+    }
+
     //функция инициализации компонента. при получение пост параметра MAKE_ORDER создает заказ.
     // параметр передается в ajax запросе при оформлении заказа
     public function executeComponent()
@@ -221,6 +282,7 @@ class ExampleCompSimple extends CBitrixComponent
             $this->SetOrder($_POST["PERSONTYPEID"], $_POST["DELIVERYID"], $_POST["PAYMENTID"], $properties);
         }
         $this->SetArResult();
+        $this->saleOrder();
         $this->includeComponentTemplate();
     }
 }

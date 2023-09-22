@@ -1,7 +1,0 @@
-.order input {
-    display: none;
-}
-
-.order input.active {
-    display: block;
-}

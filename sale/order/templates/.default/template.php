@@ -5,62 +5,72 @@
  * @var $arParams
  * @var $arResult
  */
+// выбор первого выводимого плательщика
+$firstPayer = $arResult["PERSONTYPE"][0]["ID"]
 ?>
 <div class="tabs-container">
     <?php foreach ($arResult["PERSONTYPE"] as $person): ?>
         <button id="tab_<?= $person["ID"] ?>" class="tab-button"><?= $person["NAME"] ?></button>
     <?php endforeach; ?>
 </div>
-
-
 <div class="persons-container">
-    <?php $count = 0 ?>
-    <?php foreach ($arResult["PERSONTYPE"] as $key => $person): ?>
-        <form class="form_order <?= !$count ? "active" : "" ?>" action="" id="form_<?= $person["ID"] ?>"
-              style="display: <?= !$count ? "" : "none" ?>">
-            <h2 id="person_<?= $person["ID"] ?>" class="person"></h2>
-            <h2>свойства</h2>
-            <!--    FIELDS     -->
+    <form class="form_order" action="" id="form_<?= $firstPayer ?>">
+        <h2 id="person_<?= $firstPayer ?>" class="person"></h2>
+        <h2>свойства</h2>
+        <div class="props">
             <?php foreach ($arResult["FIELDS"] as $arField): ?>
-                <?php if ($person["ID"] == $arField["PERSON_TYPE_ID"]): ?>
+                <?php if ($firstPayer == $arField["PERSON_TYPE_ID"]): ?>
+                    <label for="field_<?= $arField["ID"] ?>"><?= $arField["NAME"] ?></label>
                     <input class="active" type="text" id="field_<?= $arField["ID"] ?>"
                            placeholder="<?= $arField["NAME"] ?>">
                 <?php endif; ?>
             <?php endforeach; ?>
-            <h2>Доставка</h2>
-            <!--    DELIVERIES     -->
+        </div>
+        <h2><?= $arResult["ORDER"]["FIRST"][0]["HAVE_PRICE"] ? "Оплата" : "Доставка" ?></h2>
+        <div class="first-order-ajax">
             <?php $c = 0; ?>
-            <?php foreach ($arResult["DELIVERIES"] as $arDelivery): ?>
-                <?php if (in_array($person["ID"], $arDelivery["PERSON_TYPE_ID"]) || empty($arDelivery["PERSON_TYPE_ID"])): ?>
+            <?php foreach ($arResult["ORDER"]["FIRST"] as $arOrder): ?>
+                <?php if (!$arOrder["PERSON_TYPE_ID"] || in_array($firstPayer, $arOrder["PERSON_TYPE_ID"])): ?>
+                    <?php $arOrder["HAVE_PRICE"] ? $idType = "PAYMENTID" : $idType = "DELIVERYID"; ?>
+                    <label for="<?= $arOrder["CODE"] ?>"><?= $arOrder["NAME"] ?></label>
                     <?php if ($c == 1): ?>
-                        <input class="active" id="delivery_<?= $arDelivery["ID"] ?>" name="DELIVERYID" type="radio"
-                               checked/>
+                        <input class="ajax-btn"
+                               id="<?= $idType ?>_<?= $arOrder["ID"] ?>"
+                               name="first"
+                               data-ajax="<?= $arOrder["HAVE_PRICE"] ? implode(",", $arOrder["DELIVERY"]) : implode(",", $arOrder["PAY_SYSTEMS"]); ?>"
+                               type="radio" checked/>
                     <?php else: ?>
-                        <input class="active" id="delivery_<?= $arDelivery["ID"] ?>" name="DELIVERYID" type="radio"/>
+                        <input class="ajax-btn"
+                               id="<?= $idType ?>_<?= $arOrder["ID"] ?>"
+                               name="first"
+                               data-ajax="<?= $arOrder["HAVE_PRICE"] ? implode(",", $arOrder["DELIVERY"]) : implode(",", $arOrder["PAY_SYSTEMS"]); ?>"
+                               type="radio"/>
                     <?php endif; ?>
-                    <label for="<?= $arDelivery["CODE"] ?>"><?= $arDelivery["NAME"] ?></label>
-                    <?php $c++ ?>
                 <?php endif; ?>
+                <?php $c++ ?>
             <?php endforeach; ?>
-            <h2>Оплата</h2>
-            <!--    PAYMENTS     -->
+        </div>
+        <h2><?= $arResult["ORDER"]["SECOND"][0]["HAVE_PRICE"] ? "Оплата" : "Доставка" ?></h2>
+        <div class="second-order-ajax">
             <?php $c = 0; ?>
-            <?php foreach ($arResult["PAYSYSTEMS"] as $arPaySystem): ?>
-                <?php if (in_array($person["ID"], $arPaySystem["PERSON_TYPE_ID"]) || empty($arPaySystem["PERSON_TYPE_ID"])): ?>
+            <?php foreach ($arResult["ORDER"]["SECOND"] as $arOrder): ?>
+                <?php if (!$arOrder["PERSON_TYPE_ID"] || in_array($firstPayer, $arOrder["PERSON_TYPE_ID"])): ?>
+                    <?php $arOrder["HAVE_PRICE"] ? $idType = "PAYMENTID" : $idType = "DELIVERYID"; ?>
+                    <label for="<?= $arOrder["CODE"] ?>"><?= $arOrder["NAME"] ?></label>
                     <?php if ($c == 0): ?>
-                        <input class="active" id="paysystem_<?= $arPaySystem["ID"] ?>" name="PAYMENTID" type="radio"
-                               checked/>
+                        <input id="<?= $idType ?>_<?= $arOrder["ID"] ?>"
+                               name="second"
+                               type="radio" checked/>
                     <?php else: ?>
-                        <input class="active" id="paysystem_<?= $arPaySystem["ID"] ?>" name="PAYMENTID" type="radio"/>
+                        <input id="<?= $idType ?>_<?= $arOrder["ID"] ?>"
+                               name="second"
+                               type="radio"/>
                     <?php endif; ?>
-                    <label for="<?= $arPaySystem["CODE"] ?>"><?= $arPaySystem["NAME"] ?></label>
-                    <?php $c++ ?>
                 <?php endif; ?>
+                <?php $c++ ?>
             <?php endforeach; ?>
-            <button class="submit_custom_order">Отправить</button>
-        </form>
-        <?php $count++ ?>
-    <?php endforeach; ?>
+        </div>
+        <button class="submit_custom_order">Отправить</button>
+    </form>
 </div>
-
 <?php include('script.php'); ?>

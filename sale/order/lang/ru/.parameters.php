@@ -4,3 +4,6 @@
 $MESS["PAYSYSTEMS"] = "Платежные системы";
 $MESS["DELIVERIES"] = "Доставки";
 $MESS["PERSONS"] = "Плательщики";
+$MESS["DELIVERY"] = "Доставка -> Оплата";
+$MESS["PAYMENT"] = "Оплата -> доставка";
+$MESS["ORDER"] = "Порядок оформления заказа";

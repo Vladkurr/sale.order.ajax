@@ -69,5 +69,14 @@ $arComponentParameters = [
             "VALUES" => $arPersons,
             "ADDITIONAL_VALUES" => "N",
         ),
+        "ORDER" => array(
+            "NAME" => Loc::getMessage('ORDER'),
+            "TYPE" => "LIST",
+            "MULTIPLE" => "N",
+            "VALUES" => array(
+                "PAYSYSTEM" => Loc::getMessage('PAYMENT'),
+                "DELIVERY" => Loc::getMessage('DELIVERY')
+            ),
+        ),
     ]
 ];
